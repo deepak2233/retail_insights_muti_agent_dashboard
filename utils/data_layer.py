@@ -36,9 +36,23 @@ class DataLayer:
     def _initialize_database(self):
         """Initialize DuckDB connection and load data with error handling"""
         try:
-            # Create connection
-            self.conn = duckdb.connect(self.db_path)
-            logger.info(f"📂 Connected to DuckDB: {self.db_path}")
+            # Use in-memory database to avoid file conflicts on Streamlit Cloud
+            if self.db_path == ":memory:" or not self.db_path:
+                self.conn = duckdb.connect(":memory:")
+                logger.info("📂 Connected to in-memory DuckDB")
+            else:
+                self.conn = duckdb.connect(self.db_path)
+                logger.info(f"📂 Connected to DuckDB: {self.db_path}")
+            
+            # Check if table already exists (for cached connections)
+            try:
+                existing = self.conn.execute("SELECT COUNT(*) FROM sales").fetchone()[0]
+                if existing > 0:
+                    logger.info(f"✅ Using existing table with {existing:,} records")
+                    self.schema_info = self._get_schema()
+                    return
+            except:
+                pass  # Table doesn't exist, continue loading
             
             # Load CSV into DuckDB if exists
             if os.path.exists(self.csv_path):
@@ -47,7 +61,7 @@ class DataLayer:
                 try:
                     # Create table from CSV with error handling
                     self.conn.execute(f"""
-                        CREATE OR REPLACE TABLE sales AS 
+                        CREATE TABLE IF NOT EXISTS sales AS 
                         SELECT * FROM read_csv_auto('{self.csv_path}', 
                             ignore_errors=true,
                             null_padding=true
@@ -67,6 +81,7 @@ class DataLayer:
                     
                 except Exception as e:
                     logger.error(f"❌ Error loading CSV: {e}")
+                    print(f"❌ Error loading CSV: {e}")
                     # Try fallback: load with pandas then insert
                     self._fallback_load()
                     
@@ -77,7 +92,8 @@ class DataLayer:
                 
         except Exception as e:
             logger.error(f"❌ Error initializing database: {e}")
-            raise
+            print(f"❌ Initialization failed: {e}")
+            # Don't raise - allow app to continue with limited functionality
     
     def _create_indexes(self):
         """Create indexes on key columns"""
@@ -108,15 +124,25 @@ class DataLayer:
             logger.info("🔄 Attempting fallback load with pandas...")
             df = pd.read_csv(self.csv_path, low_memory=False)
             
+            # Check if table exists first
+            try:
+                existing = self.conn.execute("SELECT COUNT(*) FROM sales").fetchone()[0]
+                if existing > 0:
+                    logger.info(f"✅ Table already exists with {existing:,} records")
+                    return
+            except:
+                pass
+            
             # Create table from dataframe
-            self.conn.execute("CREATE OR REPLACE TABLE sales AS SELECT * FROM df")
+            self.conn.execute("CREATE TABLE IF NOT EXISTS sales AS SELECT * FROM df")
             
             row_count = self.conn.execute("SELECT COUNT(*) FROM sales").fetchone()[0]
             logger.info(f"✅ Fallback load successful: {row_count:,} records")
+            print(f"✅ Fallback load successful: {row_count:,} records")
             
         except Exception as e:
             logger.error(f"❌ Fallback load also failed: {e}")
-            raise
+            print(f"❌ Fallback load also failed: {e}")
     
     def _get_schema(self) -> pd.DataFrame:
         """Get current table schema"""
