@@ -436,15 +436,39 @@ def init_session():
             st.session_state[k] = v
 
 
+def check_api_key():
+    """Check if API key is available from secrets or environment"""
+    from config import get_secret
+    
+    # Check for Google API key
+    api_key = get_secret("GOOGLE_API_KEY")
+    if api_key:
+        return True, "google", api_key
+    
+    # Check for OpenAI API key
+    api_key = get_secret("OPENAI_API_KEY")
+    if api_key:
+        return True, "openai", api_key
+    
+    return False, None, None
+
+
 def load_system():
     """Load data and initialize agents"""
     try:
+        # First check if API key is available
+        has_key, provider, _ = check_api_key()
+        if not has_key:
+            st.warning("⚠️ No API key found. Please configure in Streamlit Cloud Secrets or sidebar.")
+            return False
+        
         st.session_state.data_layer = get_data_layer()
         st.session_state.orchestrator = get_orchestrator()
         st.session_state.initialized = True
         return True
     except Exception as e:
         st.error(f"❌ Initialization failed: {e}")
+        st.info("💡 Make sure GOOGLE_API_KEY is set in Streamlit Cloud Secrets")
         return False
 
 
@@ -1056,6 +1080,31 @@ def render_footer():
 # ============================================================================
 def main():
     init_session()
+    
+    # Sidebar for API key configuration (fallback)
+    with st.sidebar:
+        st.markdown("### ⚙️ Configuration")
+        
+        has_key, provider, _ = check_api_key()
+        
+        if has_key:
+            st.success(f"✅ Using {provider.upper()} API")
+        else:
+            st.warning("⚠️ No API key configured")
+            st.markdown("**Option 1:** Set in Streamlit Cloud Secrets")
+            st.code("GOOGLE_API_KEY = 'your-key-here'", language="toml")
+            
+            st.markdown("**Option 2:** Enter below (session only)")
+            api_key_input = st.text_input("Google API Key", type="password", key="api_key_input")
+            if api_key_input:
+                import os
+                os.environ["GOOGLE_API_KEY"] = api_key_input
+                st.success("✅ API key set for this session")
+                st.rerun()
+        
+        st.markdown("---")
+        st.markdown("**Get API Key:**")
+        st.markdown("[Google AI Studio](https://aistudio.google.com/app/apikey)")
     
     # Auto-initialize
     if not st.session_state.initialized:

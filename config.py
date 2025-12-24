@@ -16,11 +16,30 @@ def get_secret(key: str, default: str = None) -> Optional[str]:
     if env_val:
         return env_val
     
-    # Then try Streamlit secrets
+    # Try Streamlit secrets (multiple ways for compatibility)
     try:
         import streamlit as st
-        if hasattr(st, 'secrets') and key in st.secrets:
-            return str(st.secrets[key])
+        # Method 1: Direct dict access
+        if hasattr(st, 'secrets'):
+            try:
+                if key in st.secrets:
+                    return str(st.secrets[key])
+            except Exception:
+                pass
+            # Method 2: Try as attribute
+            try:
+                val = getattr(st.secrets, key, None)
+                if val:
+                    return str(val)
+            except Exception:
+                pass
+            # Method 3: Try to_dict
+            try:
+                secrets_dict = st.secrets.to_dict() if hasattr(st.secrets, 'to_dict') else dict(st.secrets)
+                if key in secrets_dict:
+                    return str(secrets_dict[key])
+            except Exception:
+                pass
     except Exception:
         pass
     
