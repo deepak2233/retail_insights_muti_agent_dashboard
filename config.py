@@ -57,8 +57,8 @@ class Settings(BaseSettings):
     google_api_key: Optional[str] = os.getenv("GOOGLE_API_KEY")
     gemini_model: str = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
     
-    # Application Settings
-    data_path: str = os.getenv("DATA_PATH", "./data/sales_data.csv")
+    # Application Settings - Use existing processed data
+    data_path: str = os.getenv("DATA_PATH", "./data/processed_sales_data.csv")
     max_context_length: int = int(os.getenv("MAX_CONTEXT_LENGTH", "4000"))
     temperature: float = float(os.getenv("TEMPERATURE", "0.1"))
     max_tokens: int = int(os.getenv("MAX_TOKENS", "2000"))
