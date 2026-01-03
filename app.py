@@ -536,9 +536,9 @@ def render_analytics():
 
         # Raw Data Explorer
         with st.expander("Deep Dive: Raw Data Explorer"):
-            df_full = st.session_state.data_layer.df
-            st.markdown(f"Displaying last 500 records out of {len(df_full):,} total.")
-            st.dataframe(df_full.tail(500), use_container_width=True)
+            df_full = st.session_state.data_layer.get_raw_data(500)
+            st.markdown(f"Displaying sample of records from the database.")
+            st.dataframe(df_full, use_container_width=True)
                 
     except Exception as e:
         st.error(f"Analytics Error: {e}")

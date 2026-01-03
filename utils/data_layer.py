@@ -61,7 +61,7 @@ class DataLayer:
             try:
                 existing = self.conn.execute("SELECT COUNT(*) FROM sales").fetchone()[0]
                 if existing > 0:
-                    logger.info(f"✅ Using existing table with {existing:,} records")
+                    logger.info(f"Using existing table with {existing:,} records")
                     self.schema_info = self._get_schema()
                     return
             except:
@@ -89,8 +89,8 @@ class DataLayer:
                     
                     # Get row count
                     row_count = self.conn.execute("SELECT COUNT(*) FROM sales").fetchone()[0]
-                    logger.info(f"✅ Loaded {row_count:,} records into DuckDB")
-                    print(f"✅ Loaded {row_count:,} records into DuckDB")
+                    logger.info(f"Loaded {row_count:,} records into DuckDB")
+                    print(f"Loaded {row_count:,} records into DuckDB")
                     
                 except Exception as e:
                     logger.error(f"❌ Error loading CSV: {e}")
@@ -99,9 +99,9 @@ class DataLayer:
                     self._fallback_load()
                     
             else:
-                logger.warning(f"⚠️  CSV file not found: {self.csv_path}")
-                print(f"⚠️  CSV file not found: {self.csv_path}")
-                print(f"💡 Run data ingestion first: python utils/data_ingestion.py")
+                logger.warning(f"CSV file not found: {self.csv_path}")
+                print(f"CSV file not found: {self.csv_path}")
+                print(f"Run data ingestion first: python utils/data_ingestion.py")
                 
         except Exception as e:
             logger.error(f"❌ Error initializing database: {e}")
@@ -180,6 +180,22 @@ class DataLayer:
         except Exception as e:
             print(f"❌ Query execution error: {e}")
             raise
+            
+    def get_raw_data(self, limit: int = 500) -> pd.DataFrame:
+        """
+        Get raw sample data from the database
+        
+        Args:
+            limit: Maximum number of records to return
+            
+        Returns:
+            DataFrame with raw records
+        """
+        try:
+            return self.conn.execute(f"SELECT * FROM sales LIMIT {limit}").fetchdf()
+        except Exception as e:
+            logger.error(f"Error getting raw data: {e}")
+            return pd.DataFrame()
     
     def get_summary_stats(self) -> Dict[str, Any]:
         """Get summary statistics of the real Amazon sales dataset"""
@@ -248,6 +264,28 @@ class DataLayer:
                 ORDER BY year, month
             """).fetchdf()
             stats["monthly_trend"] = monthly.to_dict('records')
+            
+            # By status
+            status_df = self.conn.execute("""
+                SELECT 
+                    status,
+                    COUNT(*) as orders
+                FROM sales
+                WHERE status IS NOT NULL
+                GROUP BY status
+                ORDER BY orders DESC
+            """).fetchdf()
+            stats["by_status"] = status_df.to_dict('records')
+            
+            # By fulfillment (B2B vs B2C)
+            fulfillment_df = self.conn.execute("""
+                SELECT 
+                    CASE WHEN is_b2b THEN 'B2B' ELSE 'B2C' END as method,
+                    SUM(revenue) as revenue
+                FROM sales
+                GROUP BY method
+            """).fetchdf()
+            stats["by_fulfillment"] = fulfillment_df.to_dict('records')
             
             return stats
             
