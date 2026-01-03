@@ -97,7 +97,9 @@ Guidelines:
 5. Apply appropriate filters and GROUP BY clauses
 6. For growth comparisons, calculate percentages
 7. For trends, order by time periods (year, month)
-8. Always filter out cancelled orders when analyzing revenue (use 'revenue' column or WHERE status != 'Cancelled')
+7. If the user mentions "AQL", they likely mean "SQL" for DuckDB.
+8. Always include quantitative columns (revenue, amount, quantity, etc.) and their aggregations (SUM, AVG) in the results.
+9. Always filter out cancelled orders when analyzing revenue (use 'revenue' column or WHERE status != 'Cancelled').
 
 Examples:
 
@@ -309,3 +311,4 @@ class AgentState(TypedDict):
     conversation_context: str | None
     edge_case_handled: bool | None
     facts: list | None
+    report_content: str | None

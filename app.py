@@ -326,7 +326,8 @@ def render_ai_chat():
     if submit and user_input:
         with st.spinner("Analyzing..."):
             try:
-                answer = st.session_state.orchestrator.process_query(user_input)
+                report_content = st.session_state.get('report_content')
+                answer = st.session_state.orchestrator.process_query(user_input, report_content=report_content)
                 
                 confidence = 85
                 if st.session_state.orchestrator.evaluation:
@@ -559,55 +560,59 @@ def render_data_upload():
     
     with col1:
         st.markdown("""
-        **Upload your retail sales data (CSV format)**
+        **Upload retail data or summarized reports**
         
-        Expected columns:
-        - `order_id` - Unique order identifier
-        - `date` - Order date
-        - `category` - Product category
-        - `state` - Customer state
-        - `amount` - Order amount
-        - `quantity` - Quantity ordered
-        - `status` - Order status
+        Supported formats:
+        - **Structured Data**: CSV, Excel (.xlsx), JSON
+        - **Summarized Reports**: Text (.txt), JSON, or Excel
         """)
         
         uploaded_file = st.file_uploader(
-            "Choose a CSV file",
-            type=['csv'],
-            help="Upload a CSV file with your retail data"
+            "Choose a file",
+            type=['csv', 'xlsx', 'json', 'txt'],
+            help="Upload sales data or a business report"
         )
         
         if uploaded_file is not None:
+            file_ext = Path(uploaded_file.name).suffix.lower()
             try:
-                df = pd.read_csv(uploaded_file)
-                st.success(f"Loaded {len(df):,} rows, {len(df.columns)} columns")
-                
-                st.markdown("**Data Preview:**")
-                st.dataframe(df.head(10), use_container_width=True)
-                
-                st.markdown("**Column Info:**")
-                col_info = pd.DataFrame({
-                    'Column': df.columns,
-                    'Type': df.dtypes.astype(str),
-                    'Non-Null': df.count().values,
-                    'Sample': [str(df[c].iloc[0])[:30] if len(df) > 0 else '' for c in df.columns]
-                })
-                st.dataframe(col_info, use_container_width=True, hide_index=True)
-                
-                if st.button("Load This Data", type="primary"):
-                    # Save to data folder
-                    save_path = "data/uploaded_data.csv"
-                    df.to_csv(save_path, index=False)
-                    st.session_state.uploaded_data = save_path
+                # Handle structured data (CSV, XLSX, JSON)
+                if file_ext in ['.csv', '.xlsx', '.json']:
+                    if file_ext == '.csv':
+                        df = pd.read_csv(uploaded_file)
+                    elif file_ext == '.xlsx':
+                        df = pd.read_excel(uploaded_file)
+                    else:
+                        df = pd.read_json(uploaded_file)
+                        
+                    st.success(f"Loaded {len(df):,} rows, {len(df.columns)} columns")
+                    st.markdown("**Data Preview:**")
+                    st.dataframe(df.head(10), use_container_width=True)
                     
-                    # Reload system with new data
-                    reset_orchestrator()
-                    reset_memory()
-                    st.session_state.initialized = False
-                    st.session_state.data_layer = None
-                    st.session_state.orchestrator = None
-                    st.success("Data loaded! Refreshing system...")
-                    st.rerun()
+                    if st.button("Load as Main Dataset", type="primary"):
+                        # Save and refresh
+                        save_path = f"data/uploaded_data{file_ext}"
+                        with open(save_path, "wb") as f:
+                            f.write(uploaded_file.getbuffer())
+                        
+                        st.session_state.data_layer.load_file(save_path)
+                        reset_orchestrator()
+                        reset_memory()
+                        st.success("Data loaded! Refreshing system...")
+                        st.rerun()
+                
+                # Handle text reports
+                elif file_ext == '.txt':
+                    content = uploaded_file.read().decode("utf-8")
+                    st.info("Uploaded a text-based report.")
+                    st.text_area("Report Content Preview", content[:500] + "...", height=150)
+                    
+                    if st.button("Use as Context for AI", type="primary"):
+                        st.session_state.report_content = content
+                        st.success("Report added to AI context!")
+                        if st.session_state.orchestrator:
+                            # We'll need to update orchestrator to handle this
+                            pass
                     
             except Exception as e:
                 st.error(f"Error reading file: {e}")
@@ -797,6 +802,126 @@ def render_reports():
                     st.error(f"Error: {e}")
 
 
+def render_architecture():
+    """Render scalability architecture section"""
+    st.markdown("""
+    <div class="section-header">
+        <div>
+            <h2 class="section-title">Scalability & Architecture</h2>
+            <p class="section-desc">Design for 100GB+ enterprise retail data systems</p>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    tabs = st.tabs(["System Design", "Data Engineering", "Storage & Query", "Cost Analysis"])
+    
+    with tabs[0]:
+        st.markdown("### High-Level Enterprise Architecture")
+        st.code("""
+┌─────────────────────────────────────────────────────────────────┐
+│                         USER INTERFACE                           │
+│  Streamlit / React / API Gateway                                │
+└────────────────────┬────────────────────────────────────────────┘
+                     │
+┌────────────────────▼────────────────────────────────────────────┐
+│                    APPLICATION LAYER                             │
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐         │
+│  │   LangGraph  │  │  Query Cache │  │   Session    │         │
+│  │ Orchestrator │  │    (Redis)   │  │  Management  │         │
+│  └──────────────┘  └──────────────┘  └──────────────┘         │
+│                                                                  │
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐         │
+│  │ Query Agent  │  │Extract Agent │  │Validate Agent│         │
+│  └──────────────┘  └──────────────┘  └──────────────┘         │
+└────────────────────┬────────────────────────────────────────────┘
+                     │
+┌────────────────────▼────────────────────────────────────────────┐
+│                    DATA RETRIEVAL LAYER                          │
+│  ┌──────────────────────────────────────────────────────┐      │
+│  │         Vector Database (Semantic Search)             │      │
+│  │  FAISS / Pinecone / Weaviate / ChromaDB              │      │
+│  └──────────────────────────────────────────────────────┘      │
+│                                                                  │
+│  ┌──────────────────────────────────────────────────────┐      │
+│  │         Metadata Store (Query Optimization)           │      │
+│  │  PostgreSQL / DynamoDB                                │      │
+│  └──────────────────────────────────────────────────────┘      │
+└────────────────────┬────────────────────────────────────────────┘
+                     │
+┌────────────────────▼────────────────────────────────────────────┐
+│                    DATA WAREHOUSE LAYER                          │
+│  ┌──────────────────────────────────────────────────────┐      │
+│  │         Cloud Data Warehouse (OLAP)                   │      │
+│  │  Snowflake / BigQuery / Redshift / Databricks        │      │
+│  └──────────────────────────────────────────────────────┘      │
+└────────────────────┬────────────────────────────────────────────┘
+                     │
+┌────────────────────▼────────────────────────────────────────────┐
+│                      DATA LAKE LAYER                             │
+│  ┌──────────────────────────────────────────────────────┐      │
+│  │         Object Storage (Raw Data)                     │      │
+│  │  AWS S3 / Google Cloud Storage / Azure Blob          │      │
+│  └──────────────────────────────────────────────────────┘      │
+└─────────────────────────────────────────────────────────────────┘
+        """)
+        
+        st.info("💡 **Core Strategy**: Decouple storage from compute and use a multi-layered retrieval strategy to handle massive datasets while maintaining low latency.")
+
+    with tabs[1]:
+        col1, col2 = st.columns(2)
+        with col1:
+            st.markdown("#### Data Ingestion")
+            st.markdown("""
+            - **Batch ETL**: Apache Spark for processing massive CSV/Parquet files.
+            - **Streaming**: Kafka + Spark Structured Streaming for real-time transactions.
+            - **Data Format**: Delta Lake or Iceberg for ACID transactions on S3.
+            """)
+        with col2:
+            st.markdown("#### Preprocessing")
+            st.markdown("""
+            - **Cleaning**: Automated PII masking and outlier removal.
+            - **Enrichment**: Geographic mapping and product categorization.
+            - **Partitioning**: Multi-level partitioning by `year/month/region`.
+            """)
+        
+        st.markdown("#### Example PySpark Transformation")
+        st.code("""
+df.write \
+    .format("delta") \
+    .mode("overwrite") \
+    .partitionBy("year", "month", "region") \
+    .save("s3://retail-data-lake/processed/sales")
+        """, language="python")
+
+    with tabs[2]:
+        col1, col2 = st.columns(2)
+        with col1:
+            st.markdown("#### Storage Architecture")
+            st.markdown("""
+            - **Raw**: Parquet/ORC on Cloud Object Storage.
+            - **Analytical**: Snowflake/BigQuery for complex JOINs.
+            - **Semantic**: FAISS/Pinecone for RAG-based context retrieval.
+            """)
+        with col2:
+            st.markdown("#### Optimization")
+            st.markdown("""
+            - **Intelligent Routing**: Route queries based on data size.
+            - **Query Caching**: Redis layer for 80% faster repetitive queries.
+            - **Materialized Views**: Pre-aggregated tables for dashboards.
+            """)
+
+    with tabs[3]:
+        st.markdown("#### Estimated Monthly Cost (100GB Dataset)")
+        cost_data = [
+            {"Component": "Storage (S3)", "Cost": "$2.30", "Notes": "Standard tier"},
+            {"Component": "Data Warehouse", "Cost": "$72.00", "Notes": "Snowflake X-Small"},
+            {"Component": "Vector DB", "Cost": "$70.00", "Notes": "Pinecone Starter"},
+            {"Component": "LLM API", "Cost": "$100-500", "Notes": "GPT-4 usage"},
+            {"Component": "Compute", "Cost": "$30.00", "Notes": "t3.medium instance"}
+        ]
+        st.table(cost_data)
+        st.success("**Projected Total**: ~$300 - $700 per month depending on traffic.")
+
 def render_system_panel():
     """Render system status panel"""
     with st.expander("System Configuration", expanded=False):
@@ -891,7 +1016,10 @@ def main():
     render_kpis()
     
     # Main tabs
-    tab1, tab2, tab3, tab4, tab5 = st.tabs(["AI Assistant", "Analytics", "Data Upload", "Evaluation", "Reports"])
+    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+        "AI Assistant", "Analytics", "Data Upload", 
+        "Evaluation", "Architecture", "Reports"
+    ])
     
     with tab1:
         render_ai_chat()
@@ -904,8 +1032,11 @@ def main():
     
     with tab4:
         render_evaluation_dashboard()
-    
+        
     with tab5:
+        render_architecture()
+    
+    with tab6:
         render_reports()
     
     render_system_panel()

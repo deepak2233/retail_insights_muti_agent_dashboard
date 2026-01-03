@@ -164,7 +164,8 @@ class AgentOrchestrator:
             **state,
             "question": question,
             "conversation_context": context,
-            "edge_case_handled": False
+            "edge_case_handled": False,
+            "report_content": state.get("report_content")
         }
     
     def _route_intent_node(self, state: AgentState) -> Dict[str, Any]:
@@ -182,7 +183,7 @@ class AgentOrchestrator:
                 "final_answer": last_turn["answer"]
             }
             
-        result = self.router_agent.classify(question)
+        result = self.router_agent.classify(question, report_content=state.get("report_content"))
         print(f"   [INTENT] Intent: {result.get('intent', 'analytics')}")
         
         return {
@@ -398,7 +399,7 @@ class AgentOrchestrator:
             return "extract_facts"
         return "error"
     
-    def process_query(self, question: str) -> str:
+    def process_query(self, question: str, report_content: Optional[str] = None) -> str:
         """
         Process a user question through the enhanced agent workflow
         
@@ -424,7 +425,8 @@ class AgentOrchestrator:
                 confidence_scores=None,
                 conversation_context=None,
                 edge_case_handled=None,
-                facts=None
+                facts=None,
+                report_content=report_content
             )
             
             # Run the graph

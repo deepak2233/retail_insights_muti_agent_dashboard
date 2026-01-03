@@ -22,10 +22,14 @@ class RouterAgent:
         self.prompt = ChatPromptTemplate.from_messages([
             ("system", """You are a specialized router for a Retail Insights Assistant.
 Classify the user's input into one of these categories:
-1. analytics: Questions about sales, revenue, products, orders, or customers.
+1. analytics: Questions about sales, revenue, products, orders, or customers. This includes questions that can be answered using a structured database or an uploaded summarized report.
 2. greeting: Simple hellos, greetings, or "how are you".
 3. appreciation: "thanks", "great job", "you are helpful", etc.
 4. out_of_scope: Questions about topics not related to retail (e.g., weather, recipes, news).
+
+Information about available context:
+- Database: Structured sales data is available.
+- Report Context: {report_info}
 
 If the category is NOT 'analytics', provide a polite, professional, and helpful response.
 - For greetings: Respond warmly and mention you are ready for retail analytics.
@@ -38,11 +42,12 @@ Return ONLY a JSON object."""),
         
         self.chain = self.prompt | self.llm | self.parser
 
-    def classify(self, question: str) -> Dict[str, Any]:
+    def classify(self, question: str, report_content: str = None) -> Dict[str, Any]:
         """Classify user intent using LLM"""
         try:
-            # Fast check for simple greetings to save tokens
+            # Fast check
             q_lower = question.lower().strip()
+            # ... (keep regex checks)
             if q_lower in ["hi", "hello", "hey", "hola"]:
                 return {
                     "intent": "greeting",
@@ -56,7 +61,12 @@ Return ONLY a JSON object."""),
                     "response_if_not_analytics": "You're very welcome! I'm here to help you get the most out of your retail data. Is there anything else you'd like to analyze?"
                 }
 
-            result = self.chain.invoke({"input": question})
+            report_info = "An additional summarized report is available as context." if report_content else "No additional reports are currently loaded."
+            
+            result = self.chain.invoke({
+                "input": question,
+                "report_info": report_info
+            })
             return result
         except Exception as e:
             # Fallback to analytics if LLM fails

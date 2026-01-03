@@ -41,13 +41,19 @@ class ResponseAgent:
             question = state.get("question")
             
             if not query_result or not query_intent:
-                return {
-                    **state,
-                    "final_answer": "I couldn't process your query. Please try rephrasing your question."
-                }
+                # If we have report content, we can still try to answer
+                if not state.get("report_content"):
+                    return {
+                        **state,
+                        "final_answer": "I couldn't process your query. Please try rephrasing your question."
+                    }
             
             # Format the data for the LLM
             data_summary = self._format_results(query_result)
+            sql_query = query_intent.sql_query if query_intent else "No SQL query generated."
+            
+            # Debug: Print what we are sending to LLM
+            print(f"\n--- DEBUG: DATA SENT TO LLM ---\n{data_summary}\n-------------------------------\n")
             
             # Create prompt
             prompt = ChatPromptTemplate.from_messages([
@@ -56,12 +62,13 @@ class ResponseAgent:
                     """You provide clear, insightful answers to business questions about retail sales data.
                     
 Your responses should:
-1. Directly answer the user's question
-2. Highlight key insights and trends
-3. Use specific numbers and percentages
-4. Be concise but comprehensive
-5. Provide context and business implications when relevant
-6. Format data clearly (use bullet points, tables, or structured text)
+1. Directly answer the user's question.
+2. USE THE DATA PROVIDED. If the data shows numbers (revenue, quantities, counts), you MUST include them in your answer. Never say "not specified" if the data is present in the "Data Retrieved" section.
+3. Highlight key insights and trends.
+4. Show the SQL Query if the user specifically asked for it (e.g., if they said "show query" or "sql query").
+5. Be concise but comprehensive.
+6. Provide context and business implications when relevant.
+7. Format data clearly (use bullet points, tables, or structured text).
 
 If the data shows trends, explain what they mean for the business.
 If comparing values, clearly state the differences and their significance.
@@ -72,10 +79,19 @@ Original Question: {question}
 
 Query Explanation: {explanation}
 
-Data Retrieved:
+SQL Query Used: 
+{sql_query}
+
+Data Retrieved from Database:
 {data_summary}
 
-Please provide a clear, business-focused answer to the original question based on this data.
+Additional Report Context:
+{report_content}
+
+Please provide a clear, business-focused answer to the original question. 
+- If the question is about the data retrieved, focus on that and include specific numbers.
+- If the user asked for the SQL query, include it in your response in a code block.
+- Synthesize information from both the Database and the Additional Report Context if both are relevant.
 """)
             ])
             
@@ -83,8 +99,10 @@ Please provide a clear, business-focused answer to the original question based o
             
             response = chain.invoke({
                 "question": question,
-                "explanation": query_intent.explanation,
-                "data_summary": data_summary
+                "explanation": query_intent.explanation if query_intent else "N/A",
+                "sql_query": sql_query,
+                "data_summary": data_summary,
+                "report_content": state.get("report_content", "No additional report context provided.")
             })
             
             final_answer = response.content
@@ -106,44 +124,43 @@ Please provide a clear, business-focused answer to the original question based o
             }
     
     def _format_results(self, query_result: Dict[str, Any]) -> str:
-        """Format query results for LLM consumption - optimized for token limits"""
+        """Format query results for LLM consumption - optimized for data visibility"""
         df = query_result.get("dataframe")
         
         if df is None or df.empty:
             return "No data found matching the query criteria."
         
-        # Limit columns to most relevant ones (reduce token usage)
-        important_cols = ['order_id', 'date', 'category', 'product', 'qty', 'amount', 
-                         'status', 'fulfilled_by', 'ship_city', 'ship_state', 
-                         'size', 'total', 'sales', 'revenue', 'quantity', 'price']
-        available_cols = [c for c in important_cols if c in df.columns]
-        
-        # If no important cols found, use first 10 columns
-        if not available_cols:
-            available_cols = df.columns[:10].tolist()
+        # Determine which columns to show. 
+        # For analytical queries, we usually have few columns, so show them all.
+        # If there are too many columns (>15), prioritize important ones.
+        if len(df.columns) <= 15:
+            display_cols = df.columns.tolist()
+        else:
+            important_patterns = ['id', 'date', 'category', 'status', 'revenue', 'profit', 'amount', 'total', 'count', 'sum', 'avg']
+            display_cols = [c for c in df.columns if any(p in c.lower() for p in important_patterns)]
+            # Ensure we at least have some columns
+            if not display_cols:
+                display_cols = df.columns[:10].tolist()
         
         # Use subset of columns
-        df_subset = df[available_cols] if len(available_cols) < len(df.columns) else df
+        df_subset = df[display_cols]
         
         formatted = f"Results: {len(df)} records, {len(df.columns)} columns\n"
-        formatted += f"Columns: {', '.join(df.columns[:15].tolist())}"
-        if len(df.columns) > 15:
-            formatted += f"... (+{len(df.columns) - 15} more)"
-        formatted += "\n\n"
+        formatted += f"Columns shown: {', '.join(display_cols)}\n\n"
         
-        # If small dataset, show all rows but limited columns
-        if len(df) <= 10:
-            formatted += df_subset.to_string(index=False, max_cols=10)
+        # If small dataset, show all rows
+        if len(df) <= 20:
+            formatted += df_subset.to_string(index=False)
         else:
-            # Show summary statistics for numeric columns only
+            # Show summary statistics for numeric columns
             numeric_df = df.select_dtypes(include=['number'])
             if not numeric_df.empty:
-                formatted += "Summary Statistics:\n"
-                formatted += numeric_df.describe().to_string()
+                formatted += "Summary Statistics (All Records):\n"
+                formatted += numeric_df.describe().loc[['mean', 'min', 'max', 'sum']].to_string()
                 formatted += "\n\n"
             
-            formatted += f"Sample Data (first 5 rows):\n"
-            formatted += df_subset.head(5).to_string(index=False, max_cols=10)
-            formatted += f"\n\n(Showing 5 of {len(df)} total records)"
+            formatted += f"Sample Data (first 10 rows):\n"
+            formatted += df_subset.head(10).to_string(index=False)
+            formatted += f"\n\n(Showing 10 of {len(df)} total records)"
         
         return formatted

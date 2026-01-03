@@ -67,41 +67,12 @@ class DataLayer:
             except:
                 pass  # Table doesn't exist, continue loading
             
-            # Load CSV into DuckDB if exists
+            # Load data from path if exists
             if os.path.exists(self.csv_path):
-                logger.info(f"📊 Loading data from {self.csv_path}...")
-                
-                try:
-                    # Create table from CSV with error handling
-                    self.conn.execute(f"""
-                        CREATE TABLE IF NOT EXISTS sales AS 
-                        SELECT * FROM read_csv_auto('{self.csv_path}', 
-                            ignore_errors=true,
-                            null_padding=true
-                        )
-                    """)
-                    
-                    # Create indexes for better performance
-                    self._create_indexes()
-                    
-                    # Store schema info
-                    self.schema_info = self._get_schema()
-                    
-                    # Get row count
-                    row_count = self.conn.execute("SELECT COUNT(*) FROM sales").fetchone()[0]
-                    logger.info(f"Loaded {row_count:,} records into DuckDB")
-                    print(f"Loaded {row_count:,} records into DuckDB")
-                    
-                except Exception as e:
-                    logger.error(f"❌ Error loading CSV: {e}")
-                    print(f"❌ Error loading CSV: {e}")
-                    # Try fallback: load with pandas then insert
-                    self._fallback_load()
-                    
+                self.load_file(self.csv_path)
             else:
-                logger.warning(f"CSV file not found: {self.csv_path}")
-                print(f"CSV file not found: {self.csv_path}")
-                print(f"Run data ingestion first: python utils/data_ingestion.py")
+                logger.warning(f"File not found: {self.csv_path}")
+                print(f"File not found: {self.csv_path}")
                 
         except Exception as e:
             logger.error(f"❌ Error initializing database: {e}")
@@ -157,6 +128,53 @@ class DataLayer:
             logger.error(f"❌ Fallback load also failed: {e}")
             print(f"❌ Fallback load also failed: {e}")
     
+    def load_file(self, file_path: str):
+        """Load a file (CSV, Excel, or JSON) into DuckDB"""
+        try:
+            file_ext = Path(file_path).suffix.lower()
+            logger.info(f"📊 Loading {file_ext} data from {file_path}...")
+            
+            # Check if table already exists, drop if we are loading new data
+            try:
+                self.conn.execute("DROP TABLE IF EXISTS sales")
+            except:
+                pass
+
+            if file_ext == '.csv':
+                self.conn.execute(f"""
+                    CREATE TABLE sales AS 
+                    SELECT * FROM read_csv_auto('{file_path}', 
+                        ignore_errors=true,
+                        null_padding=true
+                    )
+                """)
+            elif file_ext in ['.xlsx', '.xls']:
+                df = pd.read_excel(file_path)
+                self.conn.execute("CREATE TABLE sales AS SELECT * FROM df")
+            elif file_ext == '.json':
+                df = pd.read_json(file_path)
+                self.conn.execute("CREATE TABLE sales AS SELECT * FROM df")
+            elif file_ext == '.parquet':
+                 self.conn.execute(f"CREATE TABLE sales AS SELECT * FROM read_parquet('{file_path}')")
+            else:
+                raise ValueError(f"Unsupported file format: {file_ext}")
+
+            # Create indexes for better performance
+            self._create_indexes()
+            
+            # Store schema info
+            self.schema_info = self._get_schema()
+            
+            # Get row count
+            row_count = self.conn.execute("SELECT COUNT(*) FROM sales").fetchone()[0]
+            logger.info(f"Loaded {row_count:,} records into DuckDB")
+            print(f"Loaded {row_count:,} records into DuckDB")
+            return True
+        except Exception as e:
+            logger.error(f"❌ Error loading file {file_path}: {e}")
+            print(f"❌ Error loading file {file_path}: {e}")
+            return False
+
     def _get_schema(self) -> pd.DataFrame:
         """Get current table schema"""
         try:

@@ -9,11 +9,13 @@ A production-ready AI-powered analytics platform that enables natural language q
 ## Features
 
 - **AI-Powered Q&A** - Ask questions in natural language
+- **Multi-Source Analysis** - Combines raw database results with uploaded business reports
 - **Interactive Analytics** - Visual dashboards with Plotly charts
-- **Data Upload** - Upload your own CSV data
+- **Flexible Data Upload** - Support for CSV, Excel (.xlsx), and JSON
+- **Report Summarization** - Analyze text-based business reports (.txt)
+- **Architecture Visualization** - In-app scalability architecture for 100GB+ scale
 - **Evaluation Metrics** - Monitor AI quality and performance
-- **Auto Reports** - Generate executive summaries
-- **Multi-Agent System** - 4 specialized AI agents with LangGraph
+- **Multi-Agent System** - 5 specialized AI agents with LangGraph
 
 ---
 
@@ -64,10 +66,11 @@ User Question → Query Agent → Data Extraction → Validation → Response Ge
 
 | Agent | Function |
 |-------|----------|
+| Router Agent | Classifies intent and routes to appropriate pipeline |
 | Query Agent | Converts natural language to SQL |
 | Extraction Agent | Executes SQL on DuckDB |
 | Validation Agent | Validates data quality |
-| Response Agent | Generates insights |
+| Response Agent | Generates insights from data and reports |
 
 ---
 
