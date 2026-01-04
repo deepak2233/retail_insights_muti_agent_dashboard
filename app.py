@@ -315,6 +315,10 @@ def render_ai_chat():
     # Display message history
     for msg in st.session_state.messages:
         with st.chat_message(msg["role"]):
+            # Display chart if available
+            if msg.get("chart") and msg["chart"].get("figure"):
+                st.plotly_chart(msg["chart"]["figure"], use_container_width=True)
+            
             st.markdown(msg["content"])
             if "conf" in msg:
                 st.caption(f"Confidence: {msg['conf']:.0f}% | {msg['time']}")
@@ -360,7 +364,27 @@ def render_ai_chat():
             with st.spinner("Analyzing..."):
                 try:
                     report_content = st.session_state.get('report_content')
-                    answer = st.session_state.orchestrator.process_query(prompt, report_content=report_content)
+                    # Get full state result to access chart data
+                    result_state = st.session_state.orchestrator.graph.invoke({
+                        "question": prompt,
+                        "query_intent": None,
+                        "query_result": None,
+                        "validation_passed": False,
+                        "final_answer": "",
+                        "error": None,
+                        "confidence_scores": None,
+                        "conversation_context": None,
+                        "edge_case_handled": None,
+                        "facts": None,
+                        "report_content": report_content
+                    })
+                    
+                    answer = result_state.get("final_answer", "I couldn't generate a response.")
+                    chart_data = result_state.get("chart_data")
+                    
+                    # Display chart first if available
+                    if chart_data and chart_data.get("figure"):
+                        st.plotly_chart(chart_data["figure"], use_container_width=True, key=f"chart_{len(st.session_state.messages)}")
                     
                     confidence = 85
                     if st.session_state.orchestrator.evaluation:
@@ -372,7 +396,8 @@ def render_ai_chat():
                         "role": "assistant", 
                         "content": answer,
                         "time": datetime.now().strftime("%H:%M"),
-                        "conf": confidence
+                        "conf": confidence,
+                        "chart": chart_data
                     })
                     st.rerun()
                 except Exception as e:

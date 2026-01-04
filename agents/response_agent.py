@@ -9,6 +9,9 @@ except ImportError:
 from agents.query_agent import AgentState
 from utils.llm_utils import get_llm, create_prompt_template
 import pandas as pd
+import plotly.express as px
+import plotly.graph_objects as go
+from typing import Optional
 
 
 class ResponseAgent:
@@ -111,7 +114,8 @@ Please provide a clear, business-focused answer to the original question.
             
             return {
                 **state,
-                "final_answer": final_answer
+                "final_answer": final_answer,
+                "chart_data": self._generate_chart(query_result, query_intent)
             }
             
         except Exception as e:
@@ -164,3 +168,119 @@ Please provide a clear, business-focused answer to the original question.
             formatted += f"\n\n(Showing 10 of {len(df)} total records)"
         
         return formatted
+    
+    def _detect_chart_type(self, df: pd.DataFrame, sql_query: str) -> Optional[str]:
+        """Detect the most appropriate chart type based on query structure and results"""
+        if df is None or df.empty or len(df) > 100:
+            return None
+        
+        sql_lower = sql_query.lower()
+        num_cols = df.select_dtypes(include=['number']).columns.tolist()
+        
+        # No numeric data to visualize
+        if not num_cols:
+            return None
+        
+        # Time series detection
+        if any(col in df.columns for col in ['year', 'month', 'date', 'time_period']):
+            return 'line'
+        
+        # Distribution/comparison detection
+        if 'group by' in sql_lower:
+            # Pie chart for small categorical distributions
+            if len(df) <= 8 and len(num_cols) == 1:
+                return 'pie'
+            # Bar chart for comparisons
+            elif len(df) <= 20:
+                return 'bar'
+        
+        # Top N detection
+        if 'limit' in sql_lower and 'order by' in sql_lower:
+            return 'bar'
+        
+        return None
+    
+    def _generate_chart(self, query_result: Dict[str, Any], query_intent) -> Optional[Dict[str, Any]]:
+        """Generate a Plotly chart based on query results"""
+        try:
+            df = query_result.get("dataframe")
+            if df is None or df.empty:
+                return None
+            
+            sql_query = query_intent.sql_query if query_intent else ""
+            chart_type = self._detect_chart_type(df, sql_query)
+            
+            if not chart_type:
+                return None
+            
+            # Get numeric and categorical columns
+            num_cols = df.select_dtypes(include=['number']).columns.tolist()
+            cat_cols = df.select_dtypes(exclude=['number']).columns.tolist()
+            
+            if not num_cols or not cat_cols:
+                return None
+            
+            # Primary columns for visualization
+            x_col = cat_cols[0]
+            y_col = num_cols[0]
+            
+            # Color scheme
+            color_scale = 'Viridis'
+            
+            # Generate chart based on type
+            if chart_type == 'bar':
+                fig = px.bar(
+                    df, 
+                    x=x_col, 
+                    y=y_col,
+                    color=y_col,
+                    color_continuous_scale=color_scale,
+                    title=f"{y_col.replace('_', ' ').title()} by {x_col.replace('_', ' ').title()}"
+                )
+                fig.update_layout(
+                    plot_bgcolor='rgba(0,0,0,0)',
+                    paper_bgcolor='rgba(0,0,0,0)',
+                    showlegend=False,
+                    height=400,
+                    xaxis_tickangle=-45
+                )
+            
+            elif chart_type == 'pie':
+                fig = px.pie(
+                    df,
+                    values=y_col,
+                    names=x_col,
+                    title=f"{y_col.replace('_', ' ').title()} Distribution",
+                    hole=0.4
+                )
+                fig.update_layout(height=400)
+            
+            elif chart_type == 'line':
+                # For line charts, try to sort by time-related columns
+                if 'month' in df.columns:
+                    df = df.sort_values('month')
+                
+                fig = px.line(
+                    df,
+                    x=x_col,
+                    y=y_col,
+                    title=f"{y_col.replace('_', ' ').title()} Trend",
+                    markers=True
+                )
+                fig.update_layout(
+                    plot_bgcolor='rgba(0,0,0,0)',
+                    paper_bgcolor='rgba(0,0,0,0)',
+                    height=400
+                )
+            
+            else:
+                return None
+            
+            return {
+                "figure": fig,
+                "type": chart_type
+            }
+        
+        except Exception as e:
+            print(f"Chart generation error: {e}")
+            return None
