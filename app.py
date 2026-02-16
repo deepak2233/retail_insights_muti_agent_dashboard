@@ -7,6 +7,7 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 from datetime import datetime
+from pathlib import Path
 import sys
 import os
 
@@ -35,57 +36,73 @@ st.markdown("""
     /* Hide Streamlit defaults */
     #MainMenu {visibility: hidden;}
     footer {visibility: hidden;}
-    
-    /* Professional SaaS Theme */
+
+    /* Professional Dark SaaS Theme */
     :root {
-        --primary: #4f46e6;
+        --primary: #818cf8;
         --secondary: #6366f1;
-        --bg-main: #f8fafc;
-        --card-bg: #ffffff;
-        --border: #e2e8f0;
-        --text-main: #1e293b;
-        --text-muted: #64748b;
+        --bg-main: #0f172a;
+        --card-bg: #1e293b;
+        --border: #334155;
+        --text-main: #e2e8f0;
+        --text-muted: #94a3b8;
+        --accent-glow: rgba(129, 140, 248, 0.15);
     }
 
     [data-testid="stAppViewContainer"] {
         background-color: var(--bg-main);
+        color: var(--text-main);
     }
 
-    /* Clean Hero Section */
+    /* Dark Hero Section */
     .hero-section {
-        background: white;
+        background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%);
         padding: 2rem;
         border-radius: 16px;
         border: 1px solid var(--border);
         margin-bottom: 2rem;
-        box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+        box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
     }
-    
+
     .hero-title {
         font-size: 2.2rem;
         font-weight: 700;
-        color: var(--text-main);
+        color: #f1f5f9;
         margin: 0;
+        background: linear-gradient(135deg, #818cf8, #c084fc);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
     }
 
-    /* KPI Cards - Clean & Modern */
+    .hero-subtitle {
+        color: var(--text-muted) !important;
+    }
+
+    /* KPI Cards - Dark & Modern */
     .kpi-card {
-        background: white;
+        background: var(--card-bg);
         border: 1px solid var(--border);
         border-radius: 12px;
         padding: 1.25rem;
-        transition: transform 0.2s;
-        box-shadow: 0 1px 3px rgba(0,0,0,0.1);
-    }
-    
-    .kpi-card:hover {
-        transform: translateY(-2px);
-        border-color: var(--primary);
+        transition: all 0.3s ease;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.2);
     }
 
-    /* Chat Messages - Clean bubbles */
+    .kpi-card:hover {
+        transform: translateY(-3px);
+        border-color: var(--primary);
+        box-shadow: 0 4px 16px var(--accent-glow);
+    }
+
+    .kpi-value { color: #f1f5f9; }
+    .kpi-label { color: var(--text-muted); }
+    .kpi-trend { color: var(--text-muted); font-size: 0.8rem; }
+    .trend-up { color: #4ade80; }
+    .trend-down { color: #f87171; }
+
+    /* Chat Messages - Dark bubbles */
     .chat-window {
-        background: white;
+        background: var(--card-bg);
         border: 1px solid var(--border);
         border-radius: 16px;
         padding: 1.5rem;
@@ -100,16 +117,16 @@ st.markdown("""
         line-height: 1.5;
         font-size: 0.95rem;
     }
-    
+
     .user-message {
         background: var(--primary);
         color: white;
         margin-left: auto;
         border-bottom-right-radius: 2px;
     }
-    
+
     .ai-message {
-        background: #f1f5f9;
+        background: #334155;
         color: var(--text-main);
         border: 1px solid var(--border);
         margin-right: auto;
@@ -129,6 +146,65 @@ st.markdown("""
         padding: 0.5rem 1.5rem !important;
         font-weight: 600 !important;
     }
+
+    /* Section Headers */
+    .section-title {
+        color: #f1f5f9 !important;
+    }
+    .section-desc {
+        color: var(--text-muted) !important;
+    }
+
+    /* Chart Cards */
+    .chart-card {
+        background: var(--card-bg);
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        padding: 1rem;
+        margin-bottom: 1rem;
+    }
+    .chart-header {
+        color: var(--text-muted);
+        font-size: 0.9rem;
+        font-weight: 600;
+        margin-bottom: 0.5rem;
+    }
+
+    /* Footer */
+    .app-footer {
+        margin-top: 3rem;
+        padding: 1.5rem;
+        text-align: center;
+        color: var(--text-muted);
+        border-top: 1px solid var(--border);
+    }
+    .app-footer p { margin: 0.2rem 0; }
+
+    /* Status Pill */
+    .status-pill {
+        background: rgba(74, 222, 128, 0.15);
+        color: #4ade80;
+        padding: 0.4rem 1rem;
+        border-radius: 999px;
+        font-size: 0.85rem;
+        font-weight: 600;
+        display: inline-flex;
+        align-items: center;
+        gap: 0.4rem;
+    }
+    .status-dot {
+        width: 8px; height: 8px;
+        background: #4ade80;
+        border-radius: 50%;
+        display: inline-block;
+    }
+
+    /* Streamlit widget overrides for dark mode */
+    [data-testid="stMetricValue"] { color: #f1f5f9 !important; }
+    [data-testid="stMetricLabel"] { color: var(--text-muted) !important; }
+    .stTabs [data-baseweb="tab"] { color: var(--text-muted); }
+    .stTabs [aria-selected="true"] { color: var(--primary) !important; }
+    .stExpander { border-color: var(--border) !important; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -136,8 +212,11 @@ st.markdown("""
 st.markdown("""
 <style>
     [data-testid="stSidebar"] {
-        background-color: #ffffff;
-        border-right: 1px solid #e2e8f0;
+        background-color: #1e293b;
+        border-right: 1px solid #334155;
+    }
+    [data-testid="stSidebar"] * {
+        color: #e2e8f0;
     }
     .st-emotion-cache-16txtl3 {
         padding: 2rem 1rem;
@@ -438,11 +517,12 @@ def render_analytics():
                 fig.update_layout(
                     plot_bgcolor='rgba(0,0,0,0)',
                     paper_bgcolor='rgba(0,0,0,0)',
-                    font_color='white',
+                    font_color='#e2e8f0',
                     showlegend=False,
                     height=350,
                     margin=dict(l=20, r=20, t=20, b=60),
-                    xaxis=dict(tickangle=45)
+                    xaxis=dict(tickangle=45, gridcolor='rgba(255,255,255,0.08)'),
+                    yaxis=dict(gridcolor='rgba(255,255,255,0.08)')
                 )
                 st.plotly_chart(fig, use_container_width=True)
             st.markdown('</div>', unsafe_allow_html=True)
@@ -459,10 +539,10 @@ def render_analytics():
                 fig.update_layout(
                     plot_bgcolor='rgba(0,0,0,0)',
                     paper_bgcolor='rgba(0,0,0,0)',
-                    font_color='white',
+                    font_color='#e2e8f0',
                     height=350,
                     margin=dict(l=20, r=20, t=20, b=20),
-                    legend=dict(orientation='v', yanchor='middle', y=0.5)
+                    legend=dict(orientation='v', yanchor='middle', y=0.5, font=dict(color='#e2e8f0'))
                 )
                 st.plotly_chart(fig, use_container_width=True)
             st.markdown('</div>', unsafe_allow_html=True)
@@ -482,9 +562,11 @@ def render_analytics():
                 fig_status.update_layout(
                     plot_bgcolor='rgba(0,0,0,0)',
                     paper_bgcolor='rgba(0,0,0,0)',
-                    font_color='white',
+                    font_color='#e2e8f0',
                     height=300,
-                    margin=dict(l=20, r=20, t=10, b=40)
+                    margin=dict(l=20, r=20, t=10, b=40),
+                    xaxis=dict(gridcolor='rgba(255,255,255,0.08)'),
+                    yaxis=dict(gridcolor='rgba(255,255,255,0.08)')
                 )
                 st.plotly_chart(fig_status, use_container_width=True)
             st.markdown('</div>', unsafe_allow_html=True)
@@ -502,9 +584,10 @@ def render_analytics():
             fig_fill.update_layout(
                 plot_bgcolor='rgba(0,0,0,0)',
                 paper_bgcolor='rgba(0,0,0,0)',
-                font_color='white',
+                font_color='#e2e8f0',
                 height=300,
-                margin=dict(l=20, r=20, t=10, b=10)
+                margin=dict(l=20, r=20, t=10, b=10),
+                legend=dict(font=dict(color='#e2e8f0'))
             )
             st.plotly_chart(fig_fill, use_container_width=True)
             st.markdown('</div>', unsafe_allow_html=True)
@@ -533,11 +616,12 @@ def render_analytics():
             fig.update_layout(
                 plot_bgcolor='rgba(0,0,0,0)',
                 paper_bgcolor='rgba(0,0,0,0)',
-                font_color='white',
+                font_color='#e2e8f0',
                 height=280,
                 margin=dict(l=20, r=20, t=10, b=20),
-                legend=dict(orientation='h', yanchor='bottom', y=1.02),
-                yaxis=dict(gridcolor='rgba(255,255,255,0.1)')
+                legend=dict(orientation='h', yanchor='bottom', y=1.02, font=dict(color='#e2e8f0')),
+                xaxis=dict(gridcolor='rgba(255,255,255,0.08)'),
+                yaxis=dict(gridcolor='rgba(255,255,255,0.15)')
             )
             st.plotly_chart(fig, use_container_width=True)
         st.markdown('</div>', unsafe_allow_html=True)
