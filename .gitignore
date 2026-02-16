@@ -1,4 +1,4 @@
-# Environment
+# Environment 
 .env
 *.env.local
 __pycache__/
