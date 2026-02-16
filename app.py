@@ -205,6 +205,27 @@ st.markdown("""
     .stTabs [data-baseweb="tab"] { color: var(--text-muted); }
     .stTabs [aria-selected="true"] { color: var(--primary) !important; }
     .stExpander { border-color: var(--border) !important; }
+
+    /* Pipeline Badges */
+    .pipeline-badges { display: flex; flex-wrap: wrap; gap: 0.4rem; margin-top: 0.5rem; }
+    .badge {
+        padding: 0.2rem 0.6rem;
+        border-radius: 999px;
+        font-size: 0.72rem;
+        font-weight: 600;
+        display: inline-flex;
+        align-items: center;
+        gap: 0.3rem;
+    }
+    .badge-cache    { background: rgba(74,222,128,0.15); color: #4ade80; }
+    .badge-spell    { background: rgba(96,165,250,0.15); color: #60a5fa; }
+    .badge-guard    { background: rgba(251,191,36,0.15); color: #fbbf24; }
+    .badge-dup      { background: rgba(148,163,184,0.18); color: #94a3b8; }
+    .badge-topic    { background: rgba(192,132,252,0.15); color: #c084fc; }
+    .badge-circuit  { background: rgba(248,113,113,0.15); color: #f87171; }
+    .badge-intent   { background: rgba(129,140,248,0.12); color: #818cf8; }
+    .badge-time     { background: rgba(148,163,184,0.10); color: #94a3b8; }
+    .badge-entity   { background: rgba(45,212,191,0.15); color: #2dd4bf; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -367,52 +388,101 @@ def render_kpis():
         st.error(f"KPI Error: {e}")
 
 
+def _build_pipeline_badges_html(flags: dict, timings: dict = None) -> str:
+    """Build HTML badge strip from pipeline flags."""
+    badges = []
+    if flags.get("cache_hit"):
+        badges.append('<span class="badge badge-cache">Cache Hit</span>')
+    if flags.get("spell_corrected"):
+        orig = flags.get("original_query", "")
+        norm = flags.get("normalized_query", "")
+        if orig != norm:
+            badges.append(f'<span class="badge badge-spell">Auto-corrected: "{orig[:30]}" -> "{norm[:30]}"</span>')
+        else:
+            badges.append('<span class="badge badge-spell">Preprocessed</span>')
+    if flags.get("duplicate_detected"):
+        badges.append('<span class="badge badge-dup">Duplicate — reused answer</span>')
+    if flags.get("guardrail_blocked"):
+        gtype = flags.get("guardrail_type", "blocked")
+        badges.append(f'<span class="badge badge-guard">Guardrail: {gtype}</span>')
+    if flags.get("topic_shift"):
+        badges.append('<span class="badge badge-topic">Topic Shift Detected</span>')
+    if flags.get("circuit_breaker_open"):
+        badges.append('<span class="badge badge-circuit">Circuit Breaker — Fallback</span>')
+    if flags.get("entity_context_used"):
+        badges.append('<span class="badge badge-entity">Entity Memory Used</span>')
+    intent = flags.get("intent", "")
+    if intent:
+        badges.append(f'<span class="badge badge-intent">Intent: {intent}</span>')
+    conf = flags.get("confidence", 0)
+    if conf > 0:
+        badges.append(f'<span class="badge badge-intent">Conf: {conf*100:.0f}%</span>')
+    if timings and timings.get("total_ms"):
+        badges.append(f'<span class="badge badge-time">{timings["total_ms"]:.0f}ms</span>')
+    if not badges:
+        return ""
+    return '<div class="pipeline-badges">' + "".join(badges) + '</div>'
+
+
 def render_ai_chat():
-    """Render modern AI chat interface"""
+    """Render modern AI chat interface with pipeline visibility"""
     st.markdown("""
     <div class="section-header">
         <div>
             <h2 class="section-title">AI Insights Assistant</h2>
-            <p class="section-desc">Interactive retail intelligence with advanced guardrails</p>
+            <p class="section-desc">Production pipeline with guardrails, memory, caching, and spell correction</p>
         </div>
     </div>
     """, unsafe_allow_html=True)
-    
+
     if not st.session_state.initialized:
-        st.warning("⏳ Initializing system...")
+        st.warning("Initializing system...")
         return
 
-    # Clear chat button in a reasonable spot
+    # Clear chat button
     col_e1, col_e2 = st.columns([5, 1])
     with col_e2:
-        if st.button("Clear Chat", use_container_width=True):
-            st.session_state.messages = [{"role": "assistant", "content": "Chat cleared. How can I help you now?", "time": datetime.now().strftime("%H:%M")}]
+        if st.button("Clear Chat", use_container_width=True, type="primary"):
+            st.session_state.messages = [{
+                "role": "assistant",
+                "content": "Chat cleared. How can I help you now?",
+                "time": datetime.now().strftime("%H:%M"),
+            }]
             if st.session_state.orchestrator:
                 st.session_state.orchestrator.clear_memory()
             st.rerun()
-    
+
     # Display message history
-    for msg in st.session_state.messages:
+    for idx, msg in enumerate(st.session_state.messages):
         with st.chat_message(msg["role"]):
-            # Display chart if available
+            # Chart if available
             if msg.get("chart") and msg["chart"].get("figure"):
-                st.plotly_chart(msg["chart"]["figure"], use_container_width=True)
-            
+                st.plotly_chart(msg["chart"]["figure"], use_container_width=True, key=f"hist_chart_{idx}")
             st.markdown(msg["content"])
-            if "conf" in msg:
-                st.caption(f"Confidence: {msg['conf']:.0f}% | {msg['time']}")
-            else:
+            # Pipeline badges
+            if msg.get("pipeline_flags"):
+                badges_html = _build_pipeline_badges_html(
+                    msg["pipeline_flags"], msg.get("timings")
+                )
+                if badges_html:
+                    st.markdown(badges_html, unsafe_allow_html=True)
+                # Collapsible SQL
+                if msg.get("sql_query"):
+                    with st.expander("SQL Query", expanded=False):
+                        st.code(msg["sql_query"], language="sql")
+            elif msg.get("time"):
                 st.caption(msg["time"])
 
-    # Quick action buttons (above chat input)
+    # Suggestion buttons
     st.markdown("**Suggestions:**")
     questions = {
-        "Revenue": "What is the total revenue and how is it distributed across categories?",
+        "Revenue Analysis": "What is the total revenue and how is it distributed across categories?",
         "Top States": "Which are the top 5 states by revenue?",
-        "Cancellations": "Analyze the cancellation rate by category",
-        "SQL Query": "Show the sql query for top 5 categories by revenue"
+        "Cancellation Rate": "Analyze the cancellation rate by category",
+        "Hello!": "Hello, what can you do?",
+        "Off-topic Test": "What is the weather today?",
     }
-    
+
     rows = st.columns(len(questions))
     for i, (label, q) in enumerate(questions.items()):
         if rows[i].button(label, key=f"q_{i}", use_container_width=True):
@@ -421,7 +491,7 @@ def render_ai_chat():
 
     # Chat input
     prompt = st.chat_input("Ask about sales, trends, or specific reports...")
-    
+
     # Handle pending question from buttons
     if st.session_state.get('pending_question'):
         prompt = st.session_state.pending_question
@@ -430,53 +500,62 @@ def render_ai_chat():
     if prompt:
         # User message
         st.session_state.messages.append({
-            "role": "user", 
+            "role": "user",
             "content": prompt,
-            "time": datetime.now().strftime("%H:%M")
+            "time": datetime.now().strftime("%H:%M"),
         })
-        # Display immediately
         with st.chat_message("user"):
             st.markdown(prompt)
-        
-        # Assistant response
+
+        # Assistant response via metadata-rich pipeline
         with st.chat_message("assistant"):
-            with st.spinner("Analyzing..."):
+            with st.spinner("Analyzing through production pipeline..."):
                 try:
                     report_content = st.session_state.get('report_content')
-                    # Get full state result to access chart data
-                    result_state = st.session_state.orchestrator.graph.invoke({
-                        "question": prompt,
-                        "query_intent": None,
-                        "query_result": None,
-                        "validation_passed": False,
-                        "final_answer": "",
-                        "error": None,
-                        "confidence_scores": None,
-                        "conversation_context": None,
-                        "edge_case_handled": None,
-                        "facts": None,
-                        "report_content": report_content
-                    })
-                    
-                    answer = result_state.get("final_answer", "I couldn't generate a response.")
-                    chart_data = result_state.get("chart_data")
-                    
+                    orch = st.session_state.orchestrator
+                    result = orch.process_query_with_metadata(prompt, report_content)
+
+                    answer = result.get("answer", "I couldn't generate a response.")
+                    flags = result.get("pipeline_flags", {})
+                    timings = result.get("timings", {})
+                    sql_query = result.get("sql_query")
+                    chart_data = result.get("chart_data")
+
                     # Display chart first if available
                     if chart_data and chart_data.get("figure"):
-                        st.plotly_chart(chart_data["figure"], use_container_width=True, key=f"chart_{len(st.session_state.messages)}")
-                    
-                    confidence = 85
-                    if st.session_state.orchestrator.evaluation:
-                        es = st.session_state.orchestrator.get_evaluation_summary()
-                        confidence = es.get('overall', 0.85) * 100
-                    
+                        st.plotly_chart(
+                            chart_data["figure"], use_container_width=True,
+                            key=f"chart_{len(st.session_state.messages)}",
+                        )
+
                     st.markdown(answer)
+
+                    # Pipeline badges
+                    badges_html = _build_pipeline_badges_html(flags, timings)
+                    if badges_html:
+                        st.markdown(badges_html, unsafe_allow_html=True)
+
+                    # SQL query expander
+                    if sql_query:
+                        with st.expander("SQL Query", expanded=False):
+                            st.code(sql_query, language="sql")
+
+                    # Confidence
+                    confidence = flags.get("confidence", 0) * 100
+                    if confidence == 0 and orch.evaluation:
+                        es = orch.get_evaluation_summary()
+                        confidence = es.get('overall', 0.85) * 100
+
+                    # Store message with all metadata
                     st.session_state.messages.append({
-                        "role": "assistant", 
+                        "role": "assistant",
                         "content": answer,
                         "time": datetime.now().strftime("%H:%M"),
                         "conf": confidence,
-                        "chart": chart_data
+                        "chart": chart_data,
+                        "pipeline_flags": flags,
+                        "timings": timings,
+                        "sql_query": sql_query,
                     })
                     st.rerun()
                 except Exception as e:
@@ -923,111 +1002,162 @@ def render_reports():
 
 
 def render_architecture():
-    """Render scalability architecture section"""
+    """Render actual production pipeline architecture"""
     st.markdown("""
     <div class="section-header">
         <div>
-            <h2 class="section-title">Scalability & Architecture</h2>
-            <p class="section-desc">Design for 100GB+ enterprise retail data systems</p>
+            <h2 class="section-title">Production Pipeline Architecture</h2>
+            <p class="section-desc">Live LangGraph pipeline with all production features</p>
         </div>
     </div>
     """, unsafe_allow_html=True)
-    
-    tabs = st.tabs(["System Design", "Data Engineering", "Storage & Query", "Cost Analysis"])
-    
+
+    tabs = st.tabs(["LangGraph Pipeline", "Production Features", "Scalability Design", "Cost Analysis"])
+
     with tabs[0]:
-        st.markdown("### High-Level Enterprise Architecture")
-        st.code("""
-┌─────────────────────────────────────────────────────────────────┐
-│                         USER INTERFACE                           │
-│  Streamlit / React / API Gateway                                │
-└────────────────────┬────────────────────────────────────────────┘
-                     │
-┌────────────────────▼────────────────────────────────────────────┐
-│                    APPLICATION LAYER                             │
-│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐         │
-│  │   LangGraph  │  │  Query Cache │  │   Session    │         │
-│  │ Orchestrator │  │    (Redis)   │  │  Management  │         │
-│  └──────────────┘  └──────────────┘  └──────────────┘         │
-│                                                                  │
-│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐         │
-│  │ Query Agent  │  │Extract Agent │  │Validate Agent│         │
-│  └──────────────┘  └──────────────┘  └──────────────┘         │
-└────────────────────┬────────────────────────────────────────────┘
-                     │
-┌────────────────────▼────────────────────────────────────────────┐
-│                    DATA RETRIEVAL LAYER                          │
-│  ┌──────────────────────────────────────────────────────┐      │
-│  │         Vector Database (Semantic Search)             │      │
-│  │  FAISS / Pinecone / Weaviate / ChromaDB              │      │
-│  └──────────────────────────────────────────────────────┘      │
-│                                                                  │
-│  ┌──────────────────────────────────────────────────────┐      │
-│  │         Metadata Store (Query Optimization)           │      │
-│  │  PostgreSQL / DynamoDB                                │      │
-│  └──────────────────────────────────────────────────────┘      │
-└────────────────────┬────────────────────────────────────────────┘
-                     │
-┌────────────────────▼────────────────────────────────────────────┐
-│                    DATA WAREHOUSE LAYER                          │
-│  ┌──────────────────────────────────────────────────────┐      │
-│  │         Cloud Data Warehouse (OLAP)                   │      │
-│  │  Snowflake / BigQuery / Redshift / Databricks        │      │
-│  └──────────────────────────────────────────────────────┘      │
-└────────────────────┬────────────────────────────────────────────┘
-                     │
-┌────────────────────▼────────────────────────────────────────────┐
-│                      DATA LAKE LAYER                             │
-│  ┌──────────────────────────────────────────────────────┐      │
-│  │         Object Storage (Raw Data)                     │      │
-│  │  AWS S3 / Google Cloud Storage / Azure Blob          │      │
-│  └──────────────────────────────────────────────────────┘      │
-└─────────────────────────────────────────────────────────────────┘
-        """)
-        
-        st.info("💡 **Core Strategy**: Decouple storage from compute and use a multi-layered retrieval strategy to handle massive datasets while maintaining low latency.")
+        st.markdown("### Live Agent Pipeline (LangGraph)")
+        st.markdown("This is the **actual pipeline** running in this application:")
+
+        # Mermaid flowchart of the real LangGraph pipeline
+        mermaid_diagram = """
+        <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+        <script>mermaid.initialize({startOnLoad:true, theme:'dark', themeVariables:{
+            primaryColor:'#1e3a5f', primaryTextColor:'#e2e8f0', primaryBorderColor:'#60a5fa',
+            lineColor:'#94a3b8', secondaryColor:'#312e81', tertiaryColor:'#164e63',
+            fontSize:'14px'
+        }});</script>
+        <div class="mermaid" style="background:transparent;">
+flowchart TD
+    A["User Query"] --> B["Preprocess Node"]
+    B -->|"Injection / Edge Case"| EC["Handle Edge Case"]
+    B -->|"Cache Hit"| POST["Postprocess Node"]
+    B -->|"Clean Query"| RI["Route Intent Node"]
+
+    RI -->|"analytics"| QA["Query Agent"]
+    RI -->|"greeting / capability"| POST
+    RI -->|"out_of_scope / off-topic"| POST
+    RI -->|"duplicate"| POST
+    RI -->|"appreciation"| POST
+
+    QA -->|"NL to SQL + Entity Context"| EA["Extract Agent"]
+    EA -->|"Success"| VA["Validate Agent"]
+    EA -->|"Error + retries left"| QA
+    EA -->|"Max retries reached"| ERR["Error Handler"]
+
+    VA -->|"Pass"| FE["Fact Extractor"]
+    VA -->|"Fail"| ERR
+
+    FE --> RA["Response Agent"]
+    RA --> POST
+
+    POST --> DONE["Response + Pipeline Metadata"]
+
+    EC --> DONE2["Safe Response"]
+    ERR --> DONE3["Error Response"]
+
+    style B fill:#1e3a5f,stroke:#60a5fa,color:#e2e8f0
+    style RI fill:#312e81,stroke:#818cf8,color:#e2e8f0
+    style QA fill:#164e63,stroke:#22d3ee,color:#e2e8f0
+    style EA fill:#164e63,stroke:#22d3ee,color:#e2e8f0
+    style VA fill:#164e63,stroke:#22d3ee,color:#e2e8f0
+    style FE fill:#164e63,stroke:#22d3ee,color:#e2e8f0
+    style RA fill:#164e63,stroke:#22d3ee,color:#e2e8f0
+    style POST fill:#14532d,stroke:#4ade80,color:#e2e8f0
+    style EC fill:#78350f,stroke:#fbbf24,color:#e2e8f0
+    style ERR fill:#7f1d1d,stroke:#f87171,color:#e2e8f0
+    style DONE fill:#0f172a,stroke:#94a3b8,color:#e2e8f0
+    style DONE2 fill:#0f172a,stroke:#94a3b8,color:#e2e8f0
+    style DONE3 fill:#0f172a,stroke:#94a3b8,color:#e2e8f0
+        </div>
+        """
+        import streamlit.components.v1 as components
+        components.html(mermaid_diagram, height=700, scrolling=True)
+
+        st.markdown("---")
+        st.markdown("#### Node Descriptions")
+        node_desc = {
+            "Preprocess": "Spell correction, abbreviation expansion, synonym mapping, injection detection, cache lookup",
+            "Route Intent": "Fast regex + LLM classification → analytics, greeting, capability, off-topic, duplicate, appreciation",
+            "Query Agent": "NL → SQL translation with entity memory context, circuit breaker protection",
+            "Extract Agent": "Executes SQL on DuckDB, with retry on error (up to 3x with error learning)",
+            "Validate Agent": "Confidence scoring and data quality checks",
+            "Fact Extractor": "Extracts verifiable facts from query results to prevent hallucination",
+            "Response Agent": "Generates grounded natural language response, cross-checks against facts",
+            "Postprocess": "Updates memory, caches response, runs evaluation, logs timing",
+        }
+        for node, desc in node_desc.items():
+            st.markdown(f"- **{node}**: {desc}")
 
     with tabs[1]:
-        col1, col2 = st.columns(2)
-        with col1:
-            st.markdown("#### Data Ingestion")
-            st.markdown("""
-            - **Batch ETL**: Apache Spark for processing massive CSV/Parquet files.
-            - **Streaming**: Kafka + Spark Structured Streaming for real-time transactions.
-            - **Data Format**: Delta Lake or Iceberg for ACID transactions on S3.
-            """)
-        with col2:
-            st.markdown("#### Preprocessing")
-            st.markdown("""
-            - **Cleaning**: Automated PII masking and outlier removal.
-            - **Enrichment**: Geographic mapping and product categorization.
-            - **Partitioning**: Multi-level partitioning by `year/month/region`.
-            """)
-        
-        st.markdown("#### Example PySpark Transformation")
-        st.code("""
-df.write \
-    .format("delta") \
-    .mode("overwrite") \
-    .partitionBy("year", "month", "region") \
-    .save("s3://retail-data-lake/processed/sales")
-        """, language="python")
+        st.markdown("### Production Features (All Active)")
+        features = pd.DataFrame([
+            {"Feature": "Query Preprocessor", "Status": "Active", "Description": "Spell correction, abbreviation expansion, synonym mapping, whitespace normalization"},
+            {"Feature": "Injection Detection", "Status": "Active", "Description": "Blocks SQL injection, XSS, and prompt injection attempts"},
+            {"Feature": "Response Cache (LRU + TTL)", "Status": "Active", "Description": "Caches responses with 5-minute TTL, skips full pipeline on cache hit"},
+            {"Feature": "Semantic Duplicate Detection", "Status": "Active", "Description": "Detects similar questions using SequenceMatcher (>85% threshold)"},
+            {"Feature": "Topic-Shift Detection", "Status": "Active", "Description": "Router agent detects when user switches topics mid-conversation"},
+            {"Feature": "Entity Memory & Decay", "Status": "Active", "Description": "Tracks mentioned entities with decay weights for context-aware SQL"},
+            {"Feature": "Circuit Breaker", "Status": "Active", "Description": "Opens after 3 LLM failures, auto-resets after 60s cooldown"},
+            {"Feature": "Guardrails (Router Agent)", "Status": "Active", "Description": "Detects greetings, off-topic, out-of-scope, and redirects constructively"},
+            {"Feature": "Fact Extraction", "Status": "Active", "Description": "Extracts verifiable facts from data to prevent hallucination"},
+            {"Feature": "Grounded Response Validation", "Status": "Active", "Description": "Cross-checks response against extracted facts for faithfulness"},
+            {"Feature": "Per-Node Timing", "Status": "Active", "Description": "Tracks latency for each pipeline node (avg, p95, max)"},
+            {"Feature": "Retry with Error Learning", "Status": "Active", "Description": "Up to 3 retries with previous errors fed back to improve SQL"},
+            {"Feature": "Conversation Compaction", "Status": "Active", "Description": "Auto-summarizes older turns when memory exceeds threshold"},
+            {"Feature": "Session Analytics", "Status": "Active", "Description": "Tracks latency, error rate, cache hit rate, p95 per session"},
+        ])
+        st.dataframe(features, use_container_width=True, hide_index=True)
+
+        # Live pipeline monitor
+        st.markdown("### Live Node Timings")
+        orch = st.session_state.orchestrator
+        if orch:
+            timings = orch.get_node_timings()
+            if timings:
+                timing_data = []
+                for node, stats in timings.items():
+                    timing_data.append({
+                        "Node": node,
+                        "Calls": stats["count"],
+                        "Avg (ms)": f"{stats['avg_ms']:.0f}",
+                        "P95 (ms)": f"{stats['p95_ms']:.0f}",
+                        "Max (ms)": f"{stats['max_ms']:.0f}",
+                    })
+                st.dataframe(pd.DataFrame(timing_data), use_container_width=True, hide_index=True)
+            else:
+                st.info("No timing data yet. Ask some questions in the AI Assistant tab.")
 
     with tabs[2]:
+        st.markdown("### Scalability Design (100GB+)")
         col1, col2 = st.columns(2)
         with col1:
-            st.markdown("#### Storage Architecture")
+            st.markdown("#### Data Layer")
             st.markdown("""
-            - **Raw**: Parquet/ORC on Cloud Object Storage.
-            - **Analytical**: Snowflake/BigQuery for complex JOINs.
-            - **Semantic**: FAISS/Pinecone for RAG-based context retrieval.
+            - **Batch ETL**: Apache Spark for massive CSV/Parquet
+            - **Streaming**: Kafka + Spark Structured Streaming
+            - **Data Format**: Delta Lake / Iceberg for ACID
+            - **Partitioning**: year/month/region multi-level
+            """)
+            st.markdown("#### Storage")
+            st.markdown("""
+            - **Raw**: Parquet/ORC on Cloud Object Storage
+            - **Analytical**: Snowflake/BigQuery for complex JOINs
+            - **Semantic**: FAISS/Pinecone for RAG retrieval
             """)
         with col2:
             st.markdown("#### Optimization")
             st.markdown("""
-            - **Intelligent Routing**: Route queries based on data size.
-            - **Query Caching**: Redis layer for 80% faster repetitive queries.
-            - **Materialized Views**: Pre-aggregated tables for dashboards.
+            - **Query Routing**: Route by data size
+            - **Redis Cache**: 80% faster repetitive queries
+            - **Materialized Views**: Pre-aggregated dashboards
+            - **Connection Pooling**: DuckDB thread safety
+            """)
+            st.markdown("#### Resilience")
+            st.markdown("""
+            - **Circuit Breaker**: Auto-fallback on LLM failure
+            - **Graceful Degradation**: Optional modules fail safely
+            - **Rate Limiting**: Per-user request throttling
+            - **Retry with Learning**: Feed errors back to LLM
             """)
 
     with tabs[3]:
@@ -1036,38 +1166,41 @@ df.write \
             {"Component": "Storage (S3)", "Cost": "$2.30", "Notes": "Standard tier"},
             {"Component": "Data Warehouse", "Cost": "$72.00", "Notes": "Snowflake X-Small"},
             {"Component": "Vector DB", "Cost": "$70.00", "Notes": "Pinecone Starter"},
-            {"Component": "LLM API", "Cost": "$100-500", "Notes": "GPT-4 usage"},
-            {"Component": "Compute", "Cost": "$30.00", "Notes": "t3.medium instance"}
+            {"Component": "LLM API", "Cost": "$100-500", "Notes": "GPT-4 / Groq usage"},
+            {"Component": "Compute", "Cost": "$30.00", "Notes": "t3.medium instance"},
         ]
         st.table(cost_data)
-        st.success("**Projected Total**: ~$300 - $700 per month depending on traffic.")
+        st.success("**Projected Total**: ~$300 - $700/month depending on traffic")
 
 def render_system_panel():
-    """Render system status panel"""
+    """Render system status panel with pipeline monitor"""
     with st.expander("System Configuration", expanded=False):
         cols = st.columns(4)
-        
+
         with cols[0]:
             st.markdown("**LLM**")
             st.info(f"{settings.llm_provider.upper()}")
             model = settings.gemini_model if settings.llm_provider == 'google' else settings.openai_model
             st.info(f"{model}")
-        
+
         with cols[1]:
             st.markdown("**Data**")
             if st.session_state.initialized:
-                stats = st.session_state.data_layer.get_summary_stats()
-                o = stats.get("overall", {})
-                st.success(f"{o.get('total_orders', 0):,} records")
-                st.info(f"{o.get('date_range', 'N/A')}")
-        
+                try:
+                    stats = st.session_state.data_layer.get_summary_stats()
+                    o = stats.get("overall", {})
+                    st.success(f"{o.get('total_orders', 0):,} records")
+                    st.info(f"{o.get('date_range', 'N/A')}")
+                except Exception:
+                    st.info("Data loaded")
+
         with cols[2]:
             st.markdown("**Session**")
-            st.info(f"{len(st.session_state.messages)} queries")
+            st.info(f"{len(st.session_state.messages)} messages")
             if st.session_state.orchestrator and st.session_state.orchestrator.evaluation:
                 es = st.session_state.orchestrator.get_evaluation_summary()
                 st.info(f"Quality: {es.get('overall', 0)*100:.0f}%")
-        
+
         with cols[3]:
             st.markdown("**Actions**")
             if st.button("Reset", use_container_width=True):
@@ -1077,6 +1210,61 @@ def render_system_panel():
                     if k in st.session_state:
                         del st.session_state[k]
                 st.rerun()
+
+    # Pipeline Monitor
+    with st.expander("Pipeline Monitor", expanded=False):
+        orch = st.session_state.get("orchestrator")
+        if orch:
+            cols = st.columns(4)
+            # Circuit breaker
+            cb_status = "OPEN" if orch.circuit_breaker.is_open else "CLOSED"
+            cb_color = "error" if orch.circuit_breaker.is_open else "success"
+            with cols[0]:
+                st.markdown("**Circuit Breaker**")
+                getattr(st, cb_color)(cb_status)
+
+            # Cache stats
+            with cols[1]:
+                st.markdown("**Cache**")
+                if orch.memory and hasattr(orch.memory, 'cache'):
+                    cache_stats = orch.memory.cache.stats
+                    hit_rate = cache_stats.get('hit_rate', 0) * 100
+                    st.info(f"Hit Rate: {hit_rate:.0f}%")
+                    st.caption(f"Size: {cache_stats.get('size', 0)}")
+                else:
+                    st.info("N/A")
+
+            # Memory
+            with cols[2]:
+                st.markdown("**Memory**")
+                if orch.memory:
+                    turns = len(orch.memory.short_term)
+                    entities = len(orch.memory.entity_memory)
+                    st.info(f"{turns} turns")
+                    st.caption(f"{entities} entities tracked")
+                else:
+                    st.info("Disabled")
+
+            # Average latency
+            with cols[3]:
+                st.markdown("**Latency**")
+                if orch.memory and hasattr(orch.memory, 'analytics'):
+                    analytics = orch.memory.analytics
+                    avg_lat = analytics.get('avg_latency_ms', 0)
+                    p95_lat = analytics.get('p95_latency_ms', 0)
+                    st.info(f"Avg: {avg_lat:.0f}ms")
+                    st.caption(f"P95: {p95_lat:.0f}ms")
+                else:
+                    timings = orch.get_node_timings()
+                    if timings:
+                        all_totals = []
+                        for n, s in timings.items():
+                            all_totals.append(s['avg_ms'])
+                        st.info(f"Nodes: {sum(all_totals):.0f}ms")
+                    else:
+                        st.info("No data")
+        else:
+            st.info("Orchestrator not initialized")
 
 
 def render_footer():

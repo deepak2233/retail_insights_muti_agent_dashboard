@@ -1,7 +1,11 @@
 """
-Query Resolution Agent - Converts natural language to SQL
+Query Resolution Agent — Production-grade NL-to-SQL with
+context-aware generation and lightweight SQL validation.
 """
-from typing import Dict, Any, TypedDict
+from typing import Dict, Any, TypedDict, Optional, List
+import re
+import logging
+
 try:
     from langchain_core.prompts import ChatPromptTemplate
 except ImportError:
@@ -13,22 +17,44 @@ except ImportError:
 from pydantic import BaseModel, Field
 from utils.llm_utils import get_llm, create_prompt_template
 
+logger = logging.getLogger(__name__)
+
 
 class QueryIntent(BaseModel):
     """Structured output for query intent"""
-    intent_type: str = Field(description="Type of query: 'summary', 'comparison', 'trend', 'filter', or 'aggregation'")
-    entities: Dict[str, Any] = Field(description="Extracted entities (regions, categories, time periods, etc.)")
-    sql_query: str = Field(description="Generated SQL query for DuckDB")
-    explanation: str = Field(description="Brief explanation of what the query does")
+    intent_type: str = Field(
+        description="Type of query: 'summary', 'comparison', 'trend', 'filter', or 'aggregation'"
+    )
+    entities: Dict[str, Any] = Field(
+        description="Extracted entities (regions, categories, time periods, etc.)"
+    )
+    sql_query: str = Field(
+        description="Generated SQL query for DuckDB"
+    )
+    explanation: str = Field(
+        description="Brief explanation of what the query does"
+    )
 
 
 class QueryResolutionAgent:
-    """Agent that resolves natural language queries to SQL"""
-    
+    """
+    Production-grade query resolution agent with:
+    - Context-aware SQL generation (entity memory from conversation)
+    - Lightweight EXPLAIN-based validation
+    - Retry with error learning
+    - Structured logging
+    """
+
     def __init__(self):
         self.llm = get_llm(temperature=0.1)
         self.parser = PydanticOutputParser(pydantic_object=QueryIntent)
-        
+        # Optional: data layer for EXPLAIN validation
+        self._data_layer = None
+
+    def set_data_layer(self, data_layer):
+        """Inject the data layer for EXPLAIN validation."""
+        self._data_layer = data_layer
+
     def get_schema_context(self) -> str:
         """Return Amazon sales database schema information"""
         return """
@@ -80,15 +106,32 @@ Important Notes:
 - Check 'status' or 'is_cancelled' to filter out cancelled orders
 - 'state' contains regional data for geographical analysis
 """
-    
-    def create_prompt(self) -> ChatPromptTemplate:
-        """Create prompt template for query resolution"""
-        
-        instructions = """
+
+    def create_prompt(self, entity_context: Optional[str] = None) -> ChatPromptTemplate:
+        """
+        Create prompt template for query resolution.
+
+        Args:
+            entity_context: Optional string with active entities from
+                            the conversation (e.g. "category=Kurta, state=Maharashtra")
+        """
+
+        # Build the context-aware section
+        context_section = ""
+        if entity_context:
+            context_section = f"""
+Conversation Context:
+The user has been discussing the following entities in this conversation.
+When the follow-up question does not explicitly mention a filter,
+carry forward the most recent entity filters from this context:
+{entity_context}
+"""
+
+        instructions = f"""
 Your task is to convert natural language questions about retail sales data into SQL queries.
 
-{schema}
-
+{{schema}}
+{context_section}
 Guidelines:
 1. Analyze the user's question to understand their intent
 2. Extract relevant entities (states, categories, time periods, metrics)
@@ -100,6 +143,7 @@ Guidelines:
 7. If the user mentions "AQL", they likely mean "SQL" for DuckDB.
 8. Always include quantitative columns (revenue, amount, quantity, etc.) and their aggregations (SUM, AVG) in the results.
 9. Always filter out cancelled orders when analyzing revenue (use 'revenue' column or WHERE status != 'Cancelled').
+10. When a follow-up question uses pronouns like "it", "those", "them" or says "same", "again", references come from the conversation context above.
 
 Examples:
 
@@ -130,172 +174,237 @@ SQL: SELECT
 FROM sales 
 GROUP BY is_b2b
 
-User Question: {question}
+User Question: {{question}}
 
-{format_instructions}
+{{format_instructions}}
 """
-        
+
         prompt = ChatPromptTemplate.from_messages([
             ("system", create_prompt_template(
                 "Query Resolution Specialist",
                 "You convert natural language questions into precise SQL queries for retail analytics."
             )),
-            ("user", instructions)
+            ("user", instructions),
         ])
-        
+
         return prompt
-    
-    def resolve_query(self, question: str, context: str = None) -> QueryIntent:
+
+    def resolve_query(
+        self,
+        question: str,
+        context: Optional[str] = None,
+        entity_context: Optional[str] = None,
+    ) -> QueryIntent:
         """
-        Resolve natural language query to SQL
-        
+        Resolve natural language query to SQL.
+
         Args:
             question: User's natural language question
-            context: Optional conversation context
-            
+            context: Optional conversation context (recent turns)
+            entity_context: Optional active entity context for context-aware SQL
+
         Returns:
             QueryIntent with SQL query and metadata
         """
         try:
-            prompt = self.create_prompt()
-            
-            # Include context if available
+            prompt = self.create_prompt(entity_context=entity_context)
+
             full_question = question
             if context:
                 full_question = f"{context}\n\nCurrent question: {question}"
-            
+
             chain = prompt | self.llm | self.parser
-            
+
             result = chain.invoke({
                 "question": full_question,
                 "schema": self.get_schema_context(),
-                "format_instructions": self.parser.get_format_instructions()
+                "format_instructions": self.parser.get_format_instructions(),
             })
-            
+
+            logger.info(
+                "Query resolved: type=%s  sql=%s",
+                result.intent_type, result.sql_query[:80],
+            )
+
             return result
-            
+
         except Exception as e:
-            print(f"❌ Query resolution error: {e}")
-            # Return a safe default
+            logger.error("Query resolution error: %s", e)
             return QueryIntent(
                 intent_type="error",
                 entities={},
                 sql_query="SELECT * FROM sales LIMIT 10",
-                explanation=f"Error parsing query: {str(e)}. Showing sample data."
+                explanation=f"Error parsing query: {str(e)}. Showing sample data.",
             )
-    
-    def resolve_with_retry(self, question: str, max_retries: int = 3, 
-                           context: str = None, error_history: list = None) -> QueryIntent:
+
+    def resolve_with_retry(
+        self,
+        question: str,
+        max_retries: int = 3,
+        context: Optional[str] = None,
+        error_history: Optional[list] = None,
+        entity_context: Optional[str] = None,
+    ) -> QueryIntent:
         """
-        Resolve query with retry logic and error learning
-        
+        Resolve query with retry logic and error learning.
+
         Args:
             question: User's natural language question
             max_retries: Maximum number of retry attempts
             context: Optional conversation context
             error_history: List of previous errors for learning
-            
+            entity_context: Optional entity context for context-aware SQL
+
         Returns:
             QueryIntent with SQL query and metadata
         """
         errors = error_history or []
         last_error = None
-        
+
         for attempt in range(max_retries):
             try:
-                # Build error context from previous attempts
                 error_context = ""
                 if errors:
                     error_context = "\n\nPrevious attempts failed with these errors:\n"
-                    for i, err in enumerate(errors[-3:], 1):  # Last 3 errors
+                    for i, err in enumerate(errors[-3:], 1):
                         error_context += f"{i}. {err}\n"
                     error_context += "\nPlease avoid these mistakes in your SQL query."
-                
-                # Get the prompt with error context
-                prompt = self.create_prompt()
-                
+
+                prompt = self.create_prompt(entity_context=entity_context)
+
                 full_question = question
                 if context:
                     full_question = f"{context}\n\nCurrent question: {question}"
                 if error_context:
                     full_question += error_context
-                
+
                 chain = prompt | self.llm | self.parser
-                
+
                 result = chain.invoke({
                     "question": full_question,
                     "schema": self.get_schema_context(),
-                    "format_instructions": self.parser.get_format_instructions()
+                    "format_instructions": self.parser.get_format_instructions(),
                 })
-                
-                # Validate the generated SQL syntax
-                validation_result = self._validate_sql_syntax(result.sql_query)
-                if not validation_result["valid"]:
-                    errors.append(validation_result["error"])
-                    last_error = validation_result["error"]
-                    print(f"⚠️  Attempt {attempt + 1}: SQL validation failed - {last_error}")
+
+                # Validate the generated SQL
+                validation = self._validate_sql_syntax(result.sql_query)
+                if not validation["valid"]:
+                    errors.append(validation["error"])
+                    last_error = validation["error"]
+                    logger.warning(
+                        "Attempt %d: SQL validation failed — %s",
+                        attempt + 1, last_error,
+                    )
                     continue
-                
-                print(f"✅ Query resolved successfully on attempt {attempt + 1}")
+
+                # Optional: lightweight EXPLAIN check
+                explain_ok = self._explain_check(result.sql_query)
+                if not explain_ok:
+                    logger.warning(
+                        "Attempt %d: EXPLAIN check flagged potential full-table scan",
+                        attempt + 1,
+                    )
+                    # We still accept it but log a warning — not worth retrying
+
+                logger.info("Query resolved on attempt %d", attempt + 1)
                 return result
-                
+
             except Exception as e:
                 error_msg = str(e)
                 errors.append(error_msg)
                 last_error = error_msg
-                print(f"⚠️  Attempt {attempt + 1} failed: {error_msg}")
-        
-        # All retries exhausted
-        print(f"❌ All {max_retries} attempts failed. Returning safe fallback.")
+                logger.warning("Attempt %d failed: %s", attempt + 1, error_msg)
+
+        logger.error("All %d attempts failed. Using fallback.", max_retries)
         return QueryIntent(
             intent_type="error",
             entities={},
-            sql_query="SELECT category, COUNT(*) as count, SUM(revenue) as revenue FROM sales GROUP BY category ORDER BY revenue DESC LIMIT 10",
-            explanation=f"Query generation failed after {max_retries} attempts. Showing top categories by revenue as fallback. Last error: {last_error}"
+            sql_query=(
+                "SELECT category, COUNT(*) as count, SUM(revenue) as revenue "
+                "FROM sales GROUP BY category ORDER BY revenue DESC LIMIT 10"
+            ),
+            explanation=(
+                f"Query generation failed after {max_retries} attempts. "
+                f"Showing top categories by revenue as fallback. Last error: {last_error}"
+            ),
         )
-    
+
     def _validate_sql_syntax(self, sql: str) -> Dict[str, Any]:
         """
-        Validate SQL syntax before execution
-        
-        Args:
-            sql: SQL query string
-            
+        Validate SQL syntax before execution.
+
         Returns:
-            Dict with valid flag and optional error message
+            Dict with 'valid' flag and optional 'error' message.
         """
         if not sql or not sql.strip():
             return {"valid": False, "error": "Empty SQL query"}
-        
+
         sql_upper = sql.upper().strip()
-        
+
         # Must be a SELECT query
         if not sql_upper.startswith("SELECT"):
             return {"valid": False, "error": "Query must start with SELECT"}
-        
+
         # Must reference the sales table
         if "FROM SALES" not in sql_upper and "FROM `SALES`" not in sql_upper:
             return {"valid": False, "error": "Query must reference the 'sales' table"}
-        
-        # Check for dangerous operations
-        dangerous_keywords = ["DROP", "DELETE", "INSERT", "UPDATE", "ALTER", "CREATE", "TRUNCATE"]
-        for keyword in dangerous_keywords:
-            if keyword in sql_upper:
-                return {"valid": False, "error": f"Dangerous keyword '{keyword}' not allowed"}
-        
-        # Check for balanced parentheses
-        if sql.count('(') != sql.count(')'):
+
+        # Dangerous operations
+        dangerous = ["DROP", "DELETE", "INSERT", "UPDATE", "ALTER", "CREATE", "TRUNCATE"]
+        for kw in dangerous:
+            if kw in sql_upper:
+                return {"valid": False, "error": f"Dangerous keyword '{kw}' not allowed"}
+
+        # Balanced parentheses
+        if sql.count("(") != sql.count(")"):
             return {"valid": False, "error": "Unbalanced parentheses in query"}
-        
-        # Check for common SQL syntax issues
+
+        # SELECT / FROM count parity (subquery check)
         if sql_upper.count("SELECT") > sql_upper.count("FROM"):
             return {"valid": False, "error": "SELECT count doesn't match FROM count (subquery issue)"}
-        
-        # Basic keyword presence check
+
         if "FROM" not in sql_upper:
             return {"valid": False, "error": "Query missing FROM clause"}
-        
+
         return {"valid": True, "error": None}
+
+    def _explain_check(self, sql: str) -> bool:
+        """
+        Run a lightweight EXPLAIN on the query to flag potential
+        full-table scans. Returns True if the plan looks acceptable.
+
+        Falls back to True if no data layer is available.
+        """
+        if not self._data_layer:
+            return True
+
+        try:
+            explain_sql = f"EXPLAIN {sql}"
+            result = self._data_layer.execute_query(explain_sql)
+            if result is None:
+                return True
+
+            plan_str = str(result).upper()
+
+            # Flag scans that look expensive
+            warning_patterns = ["SEQ_SCAN", "FULL TABLE SCAN"]
+            has_limit = "LIMIT" in sql.upper()
+            has_where = "WHERE" in sql.upper()
+
+            for pattern in warning_patterns:
+                if pattern in plan_str and not has_limit and not has_where:
+                    logger.warning(
+                        "EXPLAIN flagged '%s' without LIMIT/WHERE: %s",
+                        pattern, sql[:80],
+                    )
+                    return False
+
+            return True
+
+        except Exception as exc:
+            # EXPLAIN is best-effort
+            logger.debug("EXPLAIN check failed (non-fatal): %s", exc)
+            return True
 
 
 class AgentState(TypedDict):
@@ -306,7 +415,7 @@ class AgentState(TypedDict):
     validation_passed: bool
     final_answer: str
     error: str | None
-    # New fields for enhanced state
+    # Enhanced state fields
     confidence_scores: Dict[str, float] | None
     conversation_context: str | None
     edge_case_handled: bool | None
