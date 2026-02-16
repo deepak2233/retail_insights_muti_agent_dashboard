@@ -142,4 +142,4 @@ def generate_sales_data(num_rows=50000, output_path="data/sales_data.csv"):
 
 
 if __name__ == "__main__":
-    generate_sales_data()
+    generate_sales_data() 
